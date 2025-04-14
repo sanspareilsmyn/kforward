@@ -13,7 +13,7 @@
 
 **kforward** is a lightweight, simple CLI tool designed to streamline local development for applications interacting with Kubernetes services. Built with Go, it allows you to easily access services running inside your cluster using their standard service names, without the hassle of managing multiple `kubectl port-forward` sessions.
 
-## 🤔 Why kforward?_
+## 🤔 Why kforward?
 
 Developing applications locally that need to communicate with services inside a Kubernetes cluster often involves friction:
 
