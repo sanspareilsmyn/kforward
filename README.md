@@ -1,3 +1,8 @@
+<p>
+  <img src="assets/logo.png" alt="kforward logo" width="200"/>
+  <!-- width="200" 값은 로고 크기에 맞게 조절하세요 -->
+</p>
+
 # kforward
 
 [![Go Version](https://img.shields.io/badge/Go-1.22+-00ADD8.svg)](https://golang.org/) <!-- Update Go Version if needed -->
@@ -6,7 +11,7 @@
 
 **kforward** is a lightweight, simple CLI tool designed to streamline local development for applications interacting with Kubernetes services. Built with Go, it allows you to easily access services running inside your cluster using their standard service names, without the hassle of managing multiple `kubectl port-forward` sessions.
 
-## 🤔 Why kforward?
+## 🤔 Why kforward?_
 
 Developing applications locally that need to communicate with services inside a Kubernetes cluster often involves friction:
 
