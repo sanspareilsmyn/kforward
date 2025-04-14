@@ -26,8 +26,6 @@ const (
 	transportKeepAlive             = 30 * time.Second
 	transportTLSHandshakeTimeout   = 10 * time.Second
 	transportExpectContinueTimeout = 1 * time.Second
-
-	// connectDialTimeout is removed as CONNECT handler is removed
 )
 
 // Server wraps the HTTP proxy server and its dependencies.
