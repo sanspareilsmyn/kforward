@@ -1,0 +1,26 @@
+# This file is used to configure pre-commit hooks for the project.
+# Pre-commit is a framework for managing and maintaining multi-language pre-commit hooks.
+# For more information, visit: https://pre-commit.com/
+# See https://pre-commit.com/hooks.html for a list of available hooks.
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: check-yaml
+        args: [ --allow-multiple-documents ]
+      - id: check-toml
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+
+  - repo: https://github.com/dnephin/pre-commit-golang
+    rev: v0.5.1
+    hooks:
+      - id: go-mod-tidy
+
+  - repo: https://github.com/golangci/golangci-lint
+    rev: v2.1.1
+    hooks:
+      - id: golangci-lint
+        args:
+          - "--fix"
