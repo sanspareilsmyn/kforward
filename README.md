@@ -104,97 +104,103 @@ kforward runs as a **local Go process** that acts as a central manager and proxy
 ---
 ## 🚀 Getting Started
 
-This guide helps you run `kforward` locally to access services in your existing Kubernetes cluster.
+This guide helps you install and run `kforward` locally to access services in your existing Kubernetes cluster using Homebrew.
 
-1.  **Prerequisites:**
-    *   Go (Version 1.22+ recommended - check `go.mod`)
-    *   Git
-    *   **`kubectl`**: Must be installed and available in your system's PATH. kforward uses it under the hood. Verify with `kubectl version --client`.
-    *   A Kubernetes cluster (e.g., Minikube, Kind, Docker Desktop K8s, or a remote cluster) accessible via your `kubectl` configuration.
+**1. Prerequisites:**
 
-2.  **Fork & Clone:**
-    *   Fork the repository on GitHub.
-    *   Clone your fork locally:
+*   **Homebrew:** Must be installed on your macOS or Linux system. ([Installation Guide](https://brew.sh/))
+*   **`kubectl`**: Required by `kforward` to interact with your cluster. If you don't have it, **Homebrew will install it automatically** when you install `kforward`. You can verify your `kubectl` installation afterwards with `kubectl version --client`.
+*   **A Kubernetes cluster:** (e.g., Minikube, Kind, Docker Desktop K8s, or a remote cluster) accessible via your `kubectl` configuration.
+
+**2. Install kforward using Homebrew:**
+
+*   Open your terminal and run the following commands:
+
+    ```bash
+    # 1. Add the kforward Tap (only needed once)
+    brew tap sanspareilsmyn/kforward
+
+    # 2. Install kforward (this will also install kubectl if needed)
+    brew install kforward
+    ```
+*   **Updating kforward:** To get the latest version in the future, run:
+    ```bash
+    brew upgrade kforward
+    ```
+
+**3. Deploy a Test Service (if needed):**
+
+*   To test `kforward`, you need a service running in your cluster. If you don't have one, you can deploy the example `hello-app`:
+    *   Clone the `kforward` repository (optional, just to get the example file):
         ```bash
-        git clone https://github.com/<your-username>/kforward.git # Replace with your repo path
+        # You don't need the full source code just to run kforward if installed via brew
+        # But you might want it for the examples
+        git clone https://github.com/sanspareilsmyn/kforward.git
         cd kforward
         ```
-
-3.  **Deploy a Test Service (if needed):**
-    *   To test `kforward`, you need a service running in your cluster. Use the example `hello-app.yaml` or any other service.
+    *   Apply the example manifest:
         ```bash
-        # Example: Deploy hello-app from the examples directory
         kubectl apply -f examples/hello-app.yaml [-n your-namespace]
         ```
-    *   Verify the deployment and service are running:
+*   Verify the deployment and service are running:
+    ```bash
+    kubectl get deployment hello-app-deployment [-n your-namespace]
+    kubectl get service hello-app-service [-n your-namespace]
+    ```
+
+**4. Run kforward:**
+
+*   Start the proxy, specifying the target namespace or service(s). Keep this terminal running.
+*   **Use `--context` if your desired cluster isn't the default.** Find contexts with `kubectl config get-contexts`.
+    ```bash
+    # Example 1: Manage forwards for all services in 'default' namespace using 'docker-desktop' context
+    kforward proxy --context docker-desktop --namespace default --port 1080
+    ```
+    ```bash
+    # Example 2: Manage forward for only 'hello-app-service' in 'default' namespace
+    kforward proxy --context docker-desktop --service default/hello-app-service --port 1080
+    ```
+*   Watch the logs. You should see:
+    *   Confirmation of the Kubernetes context being used.
+    *   Messages indicating `kubectl port-forward` processes are being started (e.g., `Starting kubectl process: ...`).
+    *   The HTTP Proxy server listening message (e.g., `Starting HTTP proxy server on :1080`).
+
+**5. Configure Your Client Environment:**
+
+*   In **a separate terminal**, set the `http_proxy` and `https_proxy` environment variables (lowercase recommended).
+    ```bash
+    # If kforward is running on port 1080
+    export http_proxy="http://localhost:1080"
+    export https_proxy="http://localhost:1080" # Support HTTPS is on development
+    ```
+    *   **Alternatively (Command-Specific):** Prefix your command directly:
         ```bash
-        kubectl get deployment hello-app-deployment [-n your-namespace]
-        kubectl get service hello-app-service [-n your-namespace]
+        http_proxy="http://localhost:1080" https_proxy="http://localhost:1080" curl ...
         ```
+    *   **Alternatively (curl direct flag):** Use `curl -x http://localhost:1080 ...`
 
-4.  **Build kforward:**
-    *   Fetch dependencies:
-        ```bash
-        go mod tidy
-        ```
-    *   Build the binary:
-        ```bash
-        go build -o kforward ./cmd/kforward
-        ```
+**6. Test the Connection:**
 
-5.  **Run kforward:**
-    *   Start the proxy, specifying the target namespace or service(s). Keep this terminal running.
-    *   **Use `--context` if your desired cluster isn't the default.** Find contexts with `kubectl config get-contexts`.
-        ```bash
-        # Example 1: Manage forwards for all services in 'default' namespace using 'docker-desktop' context
-        ./kforward proxy --context docker-desktop --namespace default --port 1080
-        ```
-        ```bash
-        # Example 2: Manage forward for only 'hello-app-service' in 'default' namespace
-        # Note: Service port is auto-detected. If multiple ports exist, the first is chosen by default.
-        ./kforward proxy --context docker-desktop --service default/hello-app-service --port 1080
-        ```
-    *   Watch the logs. You should see:
-        *   Confirmation of the Kubernetes context being used.
-        *   Messages indicating `kubectl port-forward` processes are being started (e.g., `Starting kubectl process: ...`).
-        *   The HTTP Proxy server listening message.
+*   From the **terminal where you set the proxy environment variables**, use `curl` (or your browser/application) to access the service using its Kubernetes DNS name.
+    ```bash
+    # Test hello-app-service (HTTP on service port 80 in default namespace)
+    curl http://hello-app-service.default.svc.cluster.local
 
-6.  **Configure Your Client Environment:**
-    *   In **a separate terminal**, set the `http_proxy` and `https_proxy` environment variables (lowercase recommended).
-        ```bash
-        # If kforward is running on port 1080
-        export http_proxy="http://localhost:1080"
-        export https_proxy="http://localhost:1080"
+    # Test another service (replace names/ports/namespaces accordingly)
+    # curl http://my-api.my-namespace.svc.cluster.local:8080
+    ```
+*   Check the `kforward` logs (first terminal) for activity: `Received request`, `Rewriting request`, `DialContext called`, `Found local forward address`, `Successfully dialed`.
+*   You should receive the correct response in your `curl` terminal (e.g., the "Hello, world!" message from `hello-app`).
 
-        # Optional but recommended: Configure no_proxy for hosts that shouldn't use the proxy
-        export no_proxy="localhost,127.0.0.1,.local,.your-internal-domain.com"
-        ```
-        *   **Alternatively (Command-Specific):** Prefix your command directly:
-            ```bash
-            http_proxy="http://localhost:1080" https_proxy="http://localhost:1080" curl ...
-            ```
-        *   **Alternatively (curl direct flag):** Use `curl -x http://localhost:1080 ...`
+**7. Stopping kforward:**
 
-7.  **Test the Connection:**
-    *   From the **terminal where you set the proxy environment variables**, use `curl` (or your browser/application) to access the service using its Kubernetes DNS name.
-        ```bash
-        # Test hello-app-service (HTTP on service port 80)
-        curl http://hello-app-service.default.svc.cluster.local
-
-        # Test another service (replace names/ports accordingly)
-        # curl http://my-api.my-namespace.svc.cluster.local:8080
-        # curl -k https://secure-service.other-ns.svc.cluster.local # -k if self-signed cert
-        ```
-    *   Check the `kforward` logs (first terminal) for activity: `Received request`, `Rewriting request`, `DialContext called`, `Found local forward address`, `Successfully dialed`.
-    *   You should receive the correct response in your `curl` terminal.
-
-8.  **Stopping kforward:**
-    *   Go back to the first terminal (where `kforward` is running) and press `Ctrl+C`.
-    *   `kforward` should log that it's stopping the proxy server and terminating the background `kubectl` processes.
-    *   In the second terminal, unset the proxy environment variables if you used `export`: `unset http_proxy https_proxy no_proxy`.
-
+*   Go back to the first terminal (where `kforward proxy` is running) and press `Ctrl+C`.
+*   `kforward` should log that it's stopping the proxy server and terminating the background `kubectl` processes.
+*   In the second terminal, unset the proxy environment variables if you used `export`:
+    ```bash
+    unset http_proxy https_proxy no_proxy
+    ```
 ---
-
 ## 🙌 Contributing
 
 We welcome contributions! Please see `CONTRIBUTING.md` for details on how to contribute.
