@@ -46,6 +46,8 @@ By automating `kubectl port-forward` management behind a simple proxy, kforward 
     *   Standard HTTP requests.
 *   **Dynamic Connection Routing:** Routes incoming proxy requests to the correct background `kubectl port-forward` process based on the requested service name and port.
 *   **Configurable Proxy Port:** Allows specifying a different local port for the HTTP proxy server using the `--port` flag.
+*   **Status Check:** Includes a `kforward status` command to view active port forwards managed by a running `kforward proxy` instance (connects to the proxy's admin server).
+*   **Configurable Admin Port:** Allows specifying a different local port for the admin server using the `--admin-port` flag on the `proxy` command (default `1081`).
 
 ## 🏗️ Architecture
 
@@ -99,6 +101,11 @@ kforward runs as a **local Go process** that acts as a central manager and proxy
     *   The background **`kubectl port-forward` process** listening on `localhost:10001` receives this connection.
     *   `kubectl` handles the secure tunneling through the **K8s API Server** to the actual Pod (e.g., `hello-app-deployment-xxxx:8080`).
     *   The response travels back through the `kubectl` tunnel, to the `kforward` proxy, and finally to your `my-app`.
+4.  **`kforward status` Command (Local Host):**
+    *   You run `kforward status` in a separate terminal.
+    *   This command connects to the **Admin HTTP server** (e.g., `localhost:1081`) of the running `kforward proxy` instance.
+    *   The Admin server asks the **Manager** for the current list of active forwards.
+    *   The `status` command receives this list and displays it in a table format.
 
 ---
 ## 🚀 Getting Started
@@ -197,6 +204,24 @@ This guide helps you install and run `kforward` locally to access services in yo
 *   In the second terminal, unset the proxy environment variables if you used `export`:
     ```bash
     unset http_proxy no_proxy
+    ```
+**7. Check Forward Status (Optional):**
+
+*   While the `kforward proxy` is still running (in the first terminal), open **a third terminal**.
+*   Run the `kforward status` command. If the admin server is running on a non-default port, specify it using `--admin-port`.
+    ```bash
+    # If admin server is running on the default port 1081
+    kforward status
+
+    # If admin server is running on port 9091 (from Example 2 in Step 4)
+    # kforward status --admin-port 9091
+    ```
+*   This will connect to the proxy's admin server and display a table of active forwards (Namespace, Service Name, Service Port, Local Port). Example output:
+    ```
+    Active kforward Port Forwards:
+    NAMESPACE   SERVICE NAME        SERVICE PORT    LOCAL PORT
+    ---------   ------------        ------------    ----------
+    default     hello-app-service   80              10001
     ```
 ---
 ## 🙌 Contributing
