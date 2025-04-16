@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -35,6 +36,14 @@ type ForwardedPortInfo struct {
 	stopFunc  func()             // Function to stop the process group
 	errChan   chan error         // Channel receives error when process exits (nil for clean exit)
 	cancelCtx context.CancelFunc // Context cancellation function specifically for this process
+}
+
+// ForwardStatusEntry defines the data returned by the GetStatus method.
+type ForwardStatusEntry struct {
+	Namespace   string `json:"namespace"`
+	ServiceName string `json:"serviceName"`
+	ServicePort int    `json:"servicePort"`
+	LocalPort   int    `json:"localPort"`
 }
 
 // Manager handles the lifecycle of kubectl port-forward processes.
@@ -406,4 +415,61 @@ func (m *Manager) StopAll() {
 
 	wg.Wait()
 	m.logger.Info("Finished signaling stop for all processes.")
+}
+
+// GetStatus returns a snapshot of the currently active forwards.
+func (m *Manager) GetStatus() []ForwardStatusEntry {
+	m.mapMutex.RLock()
+	defer m.mapMutex.RUnlock()
+
+	statusList := make([]ForwardStatusEntry, 0, len(m.activeForwards))
+
+	for key, info := range m.activeForwards {
+		// Parse the key "namespace/serviceName:servicePort"
+		namespace, serviceName, servicePort, err := parseMapKey(key)
+		if err != nil {
+			m.logger.Errorw("Failed to parse map key in GetStatus, skipping entry", "key", key, "error", err)
+			continue
+		}
+
+		entry := ForwardStatusEntry{
+			Namespace:   namespace,
+			ServiceName: serviceName,
+			ServicePort: servicePort,
+			LocalPort:   info.LocalPort,
+		}
+		statusList = append(statusList, entry)
+	}
+	return statusList
+}
+
+// parseMapKey extracts namespace, service name, and port from the map key.
+// Expected format: "namespace/serviceName:servicePort"
+func parseMapKey(key string) (namespace, serviceName string, servicePort int, err error) {
+	// Split namespace from the rest
+	parts := strings.SplitN(key, "/", 2)
+	if len(parts) != 2 {
+		err = fmt.Errorf("invalid key format: expected 'namespace/service:port', got '%s'", key)
+		return
+	}
+	namespace = parts[0]
+	serviceAndPort := parts[1]
+
+	// Split service name from port
+	parts = strings.SplitN(serviceAndPort, ":", 2)
+	if len(parts) != 2 {
+		err = fmt.Errorf("invalid key format: expected 'service:port' after namespace, got '%s'", serviceAndPort)
+		return
+	}
+	serviceName = parts[0]
+	portStr := parts[1]
+
+	// Parse port
+	servicePort, err = strconv.Atoi(portStr)
+	if err != nil {
+		err = fmt.Errorf("invalid port in key '%s': %w", key, err)
+		return
+	}
+
+	return
 }
