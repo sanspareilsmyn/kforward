@@ -27,7 +27,7 @@ func main() {
 	}(logger)
 
 	zap.ReplaceGlobals(logger)
-	zap.S().Infow("kforward starting", "version", "dev")
+	zap.S().Debugw("kforward starting", "version", "dev")
 
 	rootCmd := cli.NewRootCmd()
 
@@ -36,5 +36,5 @@ func main() {
 		os.Exit(1)
 	}
 
-	zap.S().Infow("kforward finished successfully")
+	zap.S().Debugw("kforward finished successfully")
 }

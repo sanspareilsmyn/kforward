@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"github.com/sanspareilsmyn/kforward/internal/k8s"
@@ -13,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -24,6 +26,7 @@ var (
 	proxyNamespace string
 	proxyServices  []string
 	proxyPort      int
+	adminPort      int
 )
 
 // newProxyCmd creates the 'proxy' command using the Manager and Proxy approach.
@@ -40,14 +43,14 @@ Specify the scope of services to manage using EITHER --namespace OR --service fl
 Use --context to specify the Kubernetes context if needed (--context is persistent).
 
 Configure your client (e.g., browser, curl) to use this proxy:
-export HTTP_PROXY=http://localhost:<port>
-export HTTPS_PROXY=http://localhost:<port>`,
+export HTTP_PROXY=http://localhost:<port>`,
 		RunE: runProxy,
 	}
 
 	cmd.Flags().StringVarP(&proxyNamespace, "namespace", "n", "", "Kubernetes namespace to manage forwards for (mutually exclusive with --service)")
 	cmd.Flags().StringSliceVarP(&proxyServices, "service", "s", []string{}, "Specific Kubernetes service(s) to manage forwards for ('namespace/service-name' format; mutually exclusive with --namespace)")
 	cmd.Flags().IntVarP(&proxyPort, "port", "p", 1080, "Local port for the kforward HTTP/HTTPS proxy server")
+	cmd.Flags().IntVar(&adminPort, "admin-port", 1081, "Local port for the admin server (/status endpoint)")
 
 	return cmd
 }
@@ -96,8 +99,13 @@ func runProxy(cmd *cobra.Command, args []string) error {
 	}
 	logger.Infow("HTTP proxy server initialized.", "port", proxyPort)
 
-	// 6. Run Server and Wait for Shutdown ---
-	return runServerAndWaitForShutdown(ctx, cancel, httpProxy, pfManager, proxyPort, targetScope)
+	// 6. Initialize Admin HTTP Server
+	logger.Info("Initializing admin HTTP server...")
+	adminServer := createAdminServer(pfManager, adminPort)
+	logger.Infow("Admin HTTP server initialized.", "port", adminPort)
+
+	// 7. Run Servers and Wait for Shutdown
+	return runServersAndWaitForShutdown(ctx, cancel, httpProxy, adminServer, pfManager, proxyPort, adminPort, targetScope)
 }
 
 // validateProxyFlags checks if the provided flags are valid and consistent.
@@ -190,7 +198,7 @@ func initiateForwardsForIdentifiers(ctx context.Context, pfManager *manager.Mana
 	for _, id := range identifiers {
 		serviceLogger := logger.With("namespace", id.Namespace, "service", id.Name)
 
-		// 1. Get full service details (needed for ports) - Use retry helper
+		// 1. Get full service details (needed for ports)
 		svc, err := getServiceWithRetries(ctx, k8sClient, id.Namespace, id.Name, serviceLogger)
 		if err != nil {
 			serviceLogger.Errorw("Could not get service details, skipping.", "error", err)
@@ -234,6 +242,7 @@ func initiateForwardsForIdentifiers(ctx context.Context, pfManager *manager.Mana
 	return nil
 }
 
+// getServiceWithRetries attempts to retrieve a service from the Kubernetes API
 func getServiceWithRetries(ctx context.Context, k8sClient *k8s.Client, ns string, svcName string, logger *zap.SugaredLogger) (*corev1.Service, error) {
 	var svc *corev1.Service
 	var err error
@@ -262,56 +271,134 @@ func getServiceWithRetries(ctx context.Context, k8sClient *k8s.Client, ns string
 	return nil, fmt.Errorf("failed after %d retries: %w", maxRetries+1, err)
 }
 
-// runServerAndWaitForShutdown starts the HTTP proxy and blocks until a shutdown signal
-// (SIGINT, SIGTERM) or a proxy error occurs. It then orchestrates graceful shutdown.
-func runServerAndWaitForShutdown(ctx context.Context, cancel context.CancelFunc, httpProxy *proxy.Server, pfManager *manager.Manager, port int, targetScope string) error {
+// createAdminServer sets up the HTTP server for administrative tasks.
+func createAdminServer(pfManager *manager.Manager, port int) *http.Server {
+	logger := zap.S().Named("admin-server")
+	mux := http.NewServeMux()
+
+	statusHandler := func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		logger.Debugw("Received request for /status")
+
+		// Get status from manager
+		statusEntries := pfManager.GetStatus()
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		err := json.NewEncoder(w).Encode(statusEntries)
+		if err != nil {
+			logger.Errorw("Failed to encode status response to JSON", "error", err)
+			_, err := fmt.Fprintf(w, `{"error": "failed to encode status: %v"}`, err)
+			if err != nil {
+				return
+			}
+		}
+	}
+
+	mux.HandleFunc("/status", statusHandler)
+
+	serverAddr := fmt.Sprintf("127.0.0.1:%d", port)
+	server := &http.Server{
+		Addr:    serverAddr,
+		Handler: mux,
+	}
+
+	return server
+}
+
+// runServersAndWaitForShutdown starts HTTP servers and blocks until a shutdown signal
+// or a server error occurs. It then orchestrates graceful shutdown.
+func runServersAndWaitForShutdown(ctx context.Context, cancel context.CancelFunc, mainProxy *proxy.Server, adminServer *http.Server, pfManager *manager.Manager, mainPort int, adminPort int, targetScope string) error {
 	logger := zap.S()
 
-	// Channel to receive error from the proxy server goroutine
+	// Channels to receive errors from the server goroutines
 	proxyErrChan := make(chan error, 1)
+	adminErrChan := make(chan error, 1)
+
+	// Start Main Proxy Server
 	go func() {
-		logger.Infow("Starting HTTP proxy server", "address", fmt.Sprintf("127.0.0.1:%d", port))
-		if err := httpProxy.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			logger.Errorw("HTTP proxy server error", "error", err)
-			proxyErrChan <- fmt.Errorf("proxy server failed: %w", err)
+		logger.Infow("Starting main HTTP proxy server", "address", fmt.Sprintf("127.0.0.1:%d", mainPort))
+		if err := mainProxy.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			logger.Errorw("Main HTTP proxy server error", "error", err)
+			proxyErrChan <- fmt.Errorf("main proxy server failed: %w", err)
 		} else {
-			logger.Info("HTTP proxy server stopped listening.")
+			logger.Info("Main HTTP proxy server stopped listening.")
 			proxyErrChan <- nil
 		}
+		close(proxyErrChan)
+	}()
+
+	// Start Admin Server
+	go func() {
+		logger.Infow("Starting admin HTTP server", "address", adminServer.Addr)
+		if err := adminServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			logger.Errorw("Admin HTTP server error", "error", err)
+			adminErrChan <- fmt.Errorf("admin server failed: %w", err)
+		} else {
+			logger.Info("Admin HTTP server stopped listening.")
+			adminErrChan <- nil
+		}
+		close(adminErrChan)
 	}()
 
 	// 1. Log Ready Status
 	logger.Infof("kforward (using kubectl backend) is now proxying requests for %s", targetScope)
-	logger.Info("Proxy server running on port:", port)
-	logger.Info("Configure your client (e.g., export http_proxy=http://localhost:" + fmt.Sprintf("%d", port) + " https_proxy=http://localhost:" + fmt.Sprintf("%d", port) + ")")
+	logger.Infof("Main proxy server running on port: %d", mainPort)
+	logger.Infof("Admin server running on port: %d (for 'kforward status')", adminPort)
+	logger.Info("Configure your client (e.g., export http_proxy=http://localhost:" + fmt.Sprintf("%d", mainPort) + ")")
 	logger.Info("Press Ctrl+C to stop.")
 
-	// 2. Wait for Shutdown Signal or Proxy Error
+	// 2. Wait for Shutdown Signal or Server Error
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
 	var exitError error
+	shutdownReason := "unknown reason"
 
 	select {
 	case sig := <-sigChan:
+		shutdownReason = fmt.Sprintf("received signal %s", sig)
 		logger.Infow("Received signal, shutting down gracefully...", "signal", sig)
-		performGracefulShutdown(cancel, pfManager, httpProxy)
-		err := <-proxyErrChan
-		if err != nil {
-			logger.Warnw("Proxy server reported error during signal shutdown", "error", err)
-		}
-		logger.Info("Signal shutdown complete.")
+		exitError = nil
 
 	case err := <-proxyErrChan:
 		if err != nil {
-			logger.Errorw("Proxy server stopped unexpectedly due to error", "error", err)
+			shutdownReason = "main proxy server error"
+			logger.Errorw("Main proxy server stopped unexpectedly", "error", err)
 			exitError = err
-			logger.Info("Initiating cleanup after proxy error...")
-			performGracefulShutdown(cancel, pfManager, httpProxy)
 		} else {
-			logger.Info("Proxy server stopped cleanly (before signal or explicit stop).")
-			performGracefulShutdown(cancel, pfManager, httpProxy)
+			shutdownReason = "main proxy server stopped cleanly"
+			logger.Info("Main proxy server stopped cleanly before signal.")
+			exitError = nil
 		}
+
+	case err := <-adminErrChan:
+		if err != nil {
+			shutdownReason = "admin server error"
+			logger.Errorw("Admin server stopped unexpectedly", "error", err)
+			exitError = err
+		} else {
+			shutdownReason = "admin server stopped cleanly"
+			logger.Info("Admin server stopped cleanly before signal.")
+			exitError = nil
+		}
+	}
+
+	// 3. Perform Shutdown
+	logger.Infof("Initiating graceful shutdown due to: %s", shutdownReason)
+	performGracefulShutdown(cancel, pfManager, mainProxy, adminServer)
+
+	// Drain remaining error channels
+	errProxy := <-proxyErrChan
+	errAdmin := <-adminErrChan
+	if errProxy != nil && exitError == nil {
+		logger.Warnw("Main proxy server reported error during shutdown", "error", errProxy)
+	}
+	if errAdmin != nil && exitError == nil {
+		logger.Warnw("Admin server reported error during shutdown", "error", errAdmin)
 	}
 
 	logger.Info("kforward proxy command finished.")
@@ -319,24 +406,49 @@ func runServerAndWaitForShutdown(ctx context.Context, cancel context.CancelFunc,
 }
 
 // performGracefulShutdown orchestrates the shutdown of components.
-func performGracefulShutdown(cancel context.CancelFunc, pfManager *manager.Manager, httpProxy *proxy.Server) {
+func performGracefulShutdown(cancel context.CancelFunc, pfManager *manager.Manager, mainProxy *proxy.Server, adminServer *http.Server) {
 	logger := zap.S()
-	logger.Info("Starting graceful shutdown...")
+	logger.Info("Starting graceful shutdown sequence...")
 
 	// 1. Cancel the main context (signals background tasks like manager's potential listeners)
 	cancel()
 
-	// 2. Shutdown the HTTP proxy server first to stop accepting new connections
+	// 2. Shutdown HTTP servers first to stop accepting new connections
 	shutdownTimeout := 15 * time.Second
-	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), shutdownTimeout)
-	defer shutdownCancel()
+	var wg sync.WaitGroup
 
-	logger.Infow("Shutting down HTTP proxy server...", "timeout", shutdownTimeout)
-	if err := httpProxy.Shutdown(shutdownCtx); err != nil {
-		logger.Errorw("Error during HTTP proxy server shutdown", "error", err)
-	} else {
-		logger.Info("HTTP proxy server shut down successfully.")
-	}
+	// Shutdown Main Proxy Server
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), shutdownTimeout)
+		defer shutdownCancel()
+		logger.Infow("Shutting down main HTTP proxy server...", "timeout", shutdownTimeout)
+		if err := mainProxy.Shutdown(shutdownCtx); err != nil {
+			logger.Errorw("Error during main HTTP proxy server shutdown", "error", err)
+		} else {
+			logger.Info("Main HTTP proxy server shut down successfully.")
+		}
+	}()
+
+	// Shutdown Admin Server
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), shutdownTimeout)
+		defer shutdownCancel()
+		logger.Infow("Shutting down admin HTTP server...", "timeout", shutdownTimeout)
+		if err := adminServer.Shutdown(shutdownCtx); err != nil {
+			logger.Errorw("Error during admin HTTP server shutdown", "error", err)
+		} else {
+			logger.Info("Admin HTTP server shut down successfully.")
+		}
+	}()
+
+	// Wait for both servers to finish shutting down
+	logger.Info("Waiting for HTTP servers to shut down...")
+	wg.Wait()
+	logger.Info("HTTP servers shut down.")
 
 	// 3. Stop all kubectl port-forward processes managed by the manager
 	logger.Info("Stopping all managed kubectl port-forward processes...")

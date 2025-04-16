@@ -18,6 +18,7 @@ eliminating the need to manage multiple 'kubectl port-forward' sessions.`,
 
 	rootCmd.PersistentFlags().StringVar(&kubeContext, "context", "", "Kubernetes context to use (overrides current-context in kubeconfig)")
 	rootCmd.AddCommand(newProxyCmd())
+	rootCmd.AddCommand(newStatusCmd())
 
 	return rootCmd
 }
