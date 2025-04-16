@@ -3,12 +3,13 @@ package cli
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/sanspareilsmyn/kforward/internal/manager"
 	"io"
 	"net/http"
 	"os"
 	"text/tabwriter"
 	"time"
+
+	"github.com/sanspareilsmyn/kforward/internal/manager"
 
 	"github.com/spf13/cobra"
 	"go.uber.org/zap"
@@ -24,7 +25,7 @@ func newStatusCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "status",
 		Short: "Checks the status of active forwards managed by a running kforward proxy",
-		Long: `Connects to a running 'kforward proxy' instance via its admin port
+		Long: `Connects to a running 'kforward proxy' instance via its admin port (/status endpoint)
 and displays the current service-to-local-port mappings being managed.
 
 The 'kforward proxy' command must be running with an active admin server
@@ -42,60 +43,98 @@ func runStatus(cmd *cobra.Command, args []string) error {
 	logger := zap.S()
 	logger.Debugw("Running status command", "adminPort", statusAdminPort)
 
-	// Construct the URL for the status endpoint
+	// 1. Fetch raw status data from the admin server
 	statusURL := fmt.Sprintf("http://127.0.0.1:%d/status", statusAdminPort)
 	logger.Debugf("Querying kforward proxy status endpoint: %s", statusURL)
 
-	// Create an HTTP client with a timeout
+	bodyBytes, err := fetchStatusData(statusURL)
+	if err != nil {
+		logger.Errorw("Failed to fetch status data", "url", statusURL, "error", err)
+		return err
+	}
+	logger.Debugw("Successfully fetched status data", "url", statusURL, "size", len(bodyBytes))
+
+	// 2. Parse the fetched data
+	statusEntries, err := parseStatusData(bodyBytes)
+	if err != nil {
+		logger.Errorw("Failed to parse status data", "url", statusURL, "rawData", string(bodyBytes), "error", err)
+		return fmt.Errorf("invalid response received from admin server at %s: %w", statusURL, err)
+	}
+	logger.Debugw("Successfully parsed status data", "entryCount", len(statusEntries))
+
+	// 3. Display the parsed data
+	err = displayStatus(statusEntries)
+	if err != nil {
+		logger.Errorw("Failed to display status", "error", err)
+		return err // Return the error directly
+	}
+
+	logger.Debug("Status command finished successfully.")
+	return nil
+}
+
+// fetchStatusData handles making the HTTP GET request to the admin server's status endpoint.
+// It returns the raw response body as a byte slice on success.
+func fetchStatusData(url string) ([]byte, error) {
+	logger := zap.S()
+
 	client := &http.Client{
 		Timeout: 5 * time.Second,
 	}
 
-	// Make the GET request
-	resp, err := client.Get(statusURL)
+	resp, err := client.Get(url)
 	if err != nil {
-		logger.Errorw("Failed to connect to kforward proxy admin server", "url", statusURL, "error", err)
 		if os.IsTimeout(err) {
-			return fmt.Errorf("connection to admin server at %s timed out. Is 'kforward proxy' running with admin server enabled on port %d?", statusURL, statusAdminPort)
+			return nil, fmt.Errorf("connection to admin server at %s timed out. Is 'kforward proxy' running with admin server enabled on port %d?", url, statusAdminPort)
 		}
-		return fmt.Errorf("could not connect to admin server at %s (connection refused?). Ensure 'kforward proxy' is running and using admin port %d. Error: %w", statusURL, statusAdminPort, err)
+		return nil, fmt.Errorf("could not connect to admin server at %s (connection refused?). Ensure 'kforward proxy' is running and using admin port %d. Error: %w", url, statusAdminPort, err)
 	}
-	defer func(Body io.ReadCloser) {
-		err := Body.Close()
-		if err != nil {
-			logger.Errorw("Failed to close response body", "url", statusURL, "error", err)
-		}
-	}(resp.Body)
 
-	// Check the HTTP status code
+	defer func() {
+		closeErr := resp.Body.Close()
+		if closeErr != nil {
+			logger.Warnw("Failed to close response body", "url", url, "error", closeErr)
+		}
+	}()
+
+	// Read the body first regardless of status code to potentially capture error details from the server
+	bodyBytes, readErr := io.ReadAll(resp.Body)
+	if readErr != nil {
+		logger.Errorw("Failed to read response body from admin server", "url", url, "statusCode", resp.StatusCode, "error", readErr)
+		return nil, fmt.Errorf("failed to read response from %s: %w", url, readErr)
+	}
+
+	// Now check the status code after successfully reading the body
 	if resp.StatusCode != http.StatusOK {
-		logger.Errorw("Received non-OK status from admin server", "url", statusURL, "statusCode", resp.StatusCode)
-		bodyBytes, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("kforward proxy admin server at %s returned status %d. Response: %s", statusURL, resp.StatusCode, string(bodyBytes))
+		logger.Errorw("Received non-OK status from admin server", "url", url, "statusCode", resp.StatusCode, "responseBody", string(bodyBytes))
+		return nil, fmt.Errorf("kforward proxy admin server at %s returned status %d. Response: %s", url, resp.StatusCode, string(bodyBytes))
 	}
 
-	// Read the response body
-	bodyBytes, err := io.ReadAll(resp.Body)
-	if err != nil {
-		logger.Errorw("Failed to read response body from admin server", "url", statusURL, "error", err)
-		return fmt.Errorf("failed to read response from %s: %w", statusURL, err)
-	}
+	// Status is OK, return the successfully read body bytes
+	logger.Debugw("Received OK status from admin server", "url", url)
+	return bodyBytes, nil
+}
 
-	// Parse the JSON response
+// parseStatusData parses the JSON byte slice into a slice of ForwardStatusEntry structs.
+func parseStatusData(body []byte) ([]manager.ForwardStatusEntry, error) {
 	var statusEntries []manager.ForwardStatusEntry
-	if err := json.Unmarshal(bodyBytes, &statusEntries); err != nil {
-		logger.Errorw("Failed to parse JSON response from admin server", "url", statusURL, "responseBody", string(bodyBytes), "error", err)
-		return fmt.Errorf("invalid JSON received from %s: %w", statusURL, err)
+
+	if err := json.Unmarshal(body, &statusEntries); err != nil {
+		return nil, fmt.Errorf("failed to parse JSON response: %w", err)
 	}
 
-	// Print the status in a formatted table
-	if len(statusEntries) == 0 {
+	return statusEntries, nil
+}
+
+// displayStatus handles printing the status information to the console.
+func displayStatus(entries []manager.ForwardStatusEntry) error {
+	if len(entries) == 0 {
 		fmt.Println("No active forwards reported by the kforward proxy.")
 		return nil
 	}
 
 	fmt.Println("Active kforward Port Forwards:")
-	err = printStatusTable(statusEntries)
+	err := printStatusTable(entries)
 	if err != nil {
 		return err
 	}
@@ -103,9 +142,11 @@ func runStatus(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-// printStatusTable formats and prints the status entries using tabwriter.
+// printStatusTable formats and prints the status entries using a tabwriter for alignment.
+// It returns an error if any write operation to os.Stdout fails.
 func printStatusTable(entries []manager.ForwardStatusEntry) (err error) {
 	writer := tabwriter.NewWriter(os.Stdout, 0, 0, 3, ' ', tabwriter.TabIndent)
+
 	defer func() {
 		flushErr := writer.Flush()
 		if err == nil && flushErr != nil {
@@ -113,6 +154,7 @@ func printStatusTable(entries []manager.ForwardStatusEntry) (err error) {
 		}
 	}()
 
+	// Write table header, checking for errors after each write
 	_, err = fmt.Fprintln(writer, "NAMESPACE\tSERVICE NAME\tSERVICE PORT\tLOCAL PORT")
 	if err != nil {
 		return fmt.Errorf("failed to write status table header: %w", err)
@@ -123,7 +165,7 @@ func printStatusTable(entries []manager.ForwardStatusEntry) (err error) {
 		return fmt.Errorf("failed to write status table separator: %w", err)
 	}
 
-	// Rows
+	// Write table rows
 	for _, entry := range entries {
 		_, err = fmt.Fprintf(writer, "%s\t%s\t%d\t%d\n",
 			entry.Namespace,
@@ -137,6 +179,5 @@ func printStatusTable(entries []manager.ForwardStatusEntry) (err error) {
 		}
 	}
 
-	return nil
-
+	return err
 }
