@@ -23,7 +23,7 @@ Developing applications locally that need to communicate with services inside a 
 
 **kforward aims to address these challenges by providing a simpler approach:**
 
-*   **🚀 Simple & Reliable:** Provides a straightforward local HTTP/HTTPS proxy interface while using the battle-tested `kubectl port-forward` for the actual tunneling.
+*   **🚀 Simple & Reliable:** Provides a straightforward local HTTP proxy interface while using the battle-tested `kubectl port-forward` for the actual tunneling.
 *   **kubectl Automation:** Automatically finds target pods and manages the lifecycle of required `kubectl port-forward` processes for specified services or entire namespaces.
 *   **📦 Single Binary:** The `kforward` tool itself is a single static Go binary, easy to install and run. **(Note: Requires `kubectl` to be installed and available in your PATH).**
 *   **🌐 Use Native Service Names:** Allows your local application to use standard Kubernetes service DNS names (e.g., `my-service.my-namespace.svc.cluster.local`) without code changes, just by configuring the proxy.
@@ -42,11 +42,10 @@ By automating `kubectl port-forward` management behind a simple proxy, kforward 
     *   Manages and terminates these background `kubectl` processes gracefully when `kforward` exits.
 *   **Targeted Service Forwarding:** Manages forwards for one or more specific services (`namespace/service-name`).
 *   **Namespace-Wide Forwarding:** Manages forwards for all non-headless services and their ports within a specified namespace.
-*   **Local HTTP/HTTPS Proxy:** Runs a local proxy server (default port `1080`) that handles:
+*   **Local HTTP Proxy:** Runs a local proxy server (default port `1080`) that handles:
     *   Standard HTTP requests.
-    *   HTTPS requests via the `CONNECT` method (TCP tunneling).
 *   **Dynamic Connection Routing:** Routes incoming proxy requests to the correct background `kubectl port-forward` process based on the requested service name and port.
-*   **Configurable Proxy Port:** Allows specifying a different local port for the HTTP/HTTPS proxy server using the `--port` flag.
+*   **Configurable Proxy Port:** Allows specifying a different local port for the HTTP proxy server using the `--port` flag.
 
 ## 🏗️ Architecture
 
@@ -83,13 +82,13 @@ kforward runs as a **local Go process** that acts as a central manager and proxy
 
 1.  **kforward Application (Local Host):**
     *   Runs directly on your machine (`./kforward`).
-    *   Starts a local **HTTP/HTTPS proxy** server (e.g., on `localhost:1080`).
+    *   Starts a local **HTTP proxy** server (e.g., on `localhost:1080`).
     *   Uses your `kubeconfig` and `client-go` to connect to the **Kubernetes API Server** to get service/pod information.
     *   Based on the `--namespace` or `--service` flags, the **Manager** component identifies necessary port forwards.
     *   For each required forward, the Manager **launches a `kubectl port-forward pod/... <local-port>:<pod-port>` command** as a background process. It keeps track of which service/port maps to which local port (e.g., `10001`, `10002`).
 2.  **Local Development Application (`my-app`):**
     *   Your application that needs to talk to K8s services.
-    *   Configured to use the kforward HTTP/HTTPS proxy (e.g., via `export http_proxy=http://localhost:1080 https_proxy=http://localhost:1080`).
+    *   Configured to use the kforward HTTP proxy (e.g., via `export http_proxy=http://localhost:1080`).
     *   Makes requests using the **standard Kubernetes service DNS name** (e.g., `http://hello-app-service.default.svc.cluster.local`).
 3.  **Request Handling:**
     *   The request from `my-app` is directed to the local `kforward` proxy (`localhost:1080`).
@@ -167,15 +166,14 @@ This guide helps you install and run `kforward` locally to access services in yo
 
 **5. Configure Your Client Environment:**
 
-*   In **a separate terminal**, set the `http_proxy` and `https_proxy` environment variables (lowercase recommended).
+*   In **a separate terminal**, set the `http_proxy` environment variables (lowercase recommended).
     ```bash
     # If kforward is running on port 1080
     export http_proxy="http://localhost:1080"
-    export https_proxy="http://localhost:1080" # Support HTTPS is on development
     ```
     *   **Alternatively (Command-Specific):** Prefix your command directly:
         ```bash
-        http_proxy="http://localhost:1080" https_proxy="http://localhost:1080" curl ...
+        http_proxy="http://localhost:1080" curl ...
         ```
     *   **Alternatively (curl direct flag):** Use `curl -x http://localhost:1080 ...`
 
@@ -198,7 +196,7 @@ This guide helps you install and run `kforward` locally to access services in yo
 *   `kforward` should log that it's stopping the proxy server and terminating the background `kubectl` processes.
 *   In the second terminal, unset the proxy environment variables if you used `export`:
     ```bash
-    unset http_proxy https_proxy no_proxy
+    unset http_proxy no_proxy
     ```
 ---
 ## 🙌 Contributing

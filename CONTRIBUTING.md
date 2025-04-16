@@ -75,19 +75,15 @@ To contribute code, you'll need a local development environment. `kforward` runs
         ./kforward proxy --context docker-desktop --namespace default --port 1080
         ```
         *   Observe the logs for successful initialization and messages indicating `kubectl port-forward` processes are starting.
-    *   **3. Configure Client Environment for Testing:** In **Terminal 2**, set the **HTTP/HTTPS proxy environment variables** (lowercase recommended):
+    *   **3. Configure Client Environment for Testing:** In **Terminal 2**, set the **HTTP proxy environment variables** (lowercase recommended):
         ```bash
         export http_proxy="http://localhost:1080"  # Use the port kforward is listening on
-        export https_proxy="http://localhost:1080" # Use the same for HTTPS via CONNECT
         export no_proxy="localhost,127.0.0.1"     # Prevent proxying local requests
         ```
     *   **4. Test Connection via kforward:** From **Terminal 2** (where proxy env vars are set), use `curl` to access your test service using its Kubernetes DNS name. **Do NOT use extra flags like `--socks5-hostname`.**
         ```bash
         # Test HTTP service
         curl http://hello-app-service.default.svc.cluster.local
-
-        # Test HTTPS service (add -k if using self-signed certs)
-        # curl [-k] https://my-secure-service.my-ns.svc.cluster.local
         ```
         *   **Expected Result:** You should get the correct response from the service in Terminal 2.
         *   **Check Logs:** Observe the logs in Terminal 1 (`kforward`) to see the proxy request handling, manager lookups, and potentially output from the background `kubectl` processes.
@@ -98,7 +94,7 @@ To contribute code, you'll need a local development environment. `kforward` runs
 
 7.  **Stopping the Environment:**
     *   Stop the `kforward` application in **Terminal 1** (usually `Ctrl+C`). It should attempt to terminate the background `kubectl` processes.
-    *   Unset the environment variables in **Terminal 2**: `unset http_proxy https_proxy no_proxy`.
+    *   Unset the environment variables in **Terminal 2**: `unset http_proxy no_proxy`.
     *   Optionally, delete the test service from Kubernetes: `kubectl delete -f examples/hello-app.yaml [-n your-namespace]`.
 
 ## Contribution Workflow
