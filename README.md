@@ -5,7 +5,7 @@
 
 # kforward
 
-<a href="https://www.producthunt.com/posts/kforward?embed=true&utm_source=badge-featured&utm_medium=badge&utm_souce=badge-kforward" target="_blank"><img src="https://api.producthunt.com/widgets/embed-image/v1/featured.svg?post_id=953355&theme=light&t=1744642622146" alt="kforward - Lightweight&#0032;k8s&#0032;proxy&#0032;for&#0032;local&#0032;dev | Product Hunt" style="width: 250px; height: 54px;" width="250" height="54" /></a>
+<a href="https://www.buymeacoffee.com/sanspareilsmyn"><img src="https://img.buymeacoffee.com/button-api/?text=Buy me a coffee&emoji=&slug=sanspareilsmyn&button_colour=FFDD00&font_colour=000000&font_family=Cookie&outline_colour=000000&coffee_colour=ffffff" /></a><a href="https://www.producthunt.com/posts/kforward?embed=true&utm_source=badge-featured&utm_medium=badge&utm_souce=badge-kforward" target="_blank"><img src="https://api.producthunt.com/widgets/embed-image/v1/featured.svg?post_id=953355&theme=light&t=1744642622146" alt="kforward - Lightweight&#0032;k8s&#0032;proxy&#0032;for&#0032;local&#0032;dev | Product Hunt" style="width: 250px; height: 54px;" width="250" height="54" /></a>
 
 [![Go Version](https://img.shields.io/badge/Go-1.22+-00ADD8.svg)](https://golang.org/) <!-- Update Go Version if needed -->
 [![Build Status](https://img.shields.io/badge/Build-Passing-brightgreen.svg)]() <!-- TODO: Replace with actual CI badge -->
